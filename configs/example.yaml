@@ -7,6 +7,10 @@ time_col: t_ms                #시간 축 헤더 단위
 resample_hz: 10               # null/0이면 리샘플 스킵
 # homography_path: H.npy      # (u,v)만 있을 때 필요
 
+# 두 CSV 병합 시 사용
+yolo_time_offset_ms: 0      # YOLO 시간축을 '앞으로(+)' 밀어 UWB에 맞춤 (예: 900)
+merge_tolerance_ms: 150     # asof 병합 허용 오차(ms). grid 병합이 기본이라 예비 안전용.
+
 # 입력 피처 (CSV 헤더와 일치)
 feature_cols:
   - uwb_x         # [m]

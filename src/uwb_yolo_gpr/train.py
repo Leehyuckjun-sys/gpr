@@ -20,6 +20,33 @@ from .homography_transform import load_H, apply_homography
 def load_config(path: str | Path) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
+def _coerce_model_numbers(m: dict) -> dict:
+    """
+    YAML에서 문자열(str)로 들어올 수 있는 수치(alpha, noise, length_scale, matern_nu)를
+    안전하게 float로 강제 변환한다.
+    """
+    def _f(x):
+        if isinstance(x, (int, float)):
+            return float(x)
+        if isinstance(x, str):
+            # '1e-6' 같은 문자열도 처리
+            return float(x)
+        return float(x)
+
+    out = dict(m)
+    # length_scale: 스칼라/리스트 모두 지원
+    if "length_scale" in out:
+        ls = out["length_scale"]
+        out["length_scale"] = [_f(v) for v in ls] if isinstance(ls, (list, tuple)) else _f(ls)
+
+    for k, default in (("alpha", 1e-6), ("noise", 1e-3), ("matern_nu", 1.5)):
+        out[k] = _f(out.get(k, default))
+
+    # kernel/ard는 원본 유지(문자열/불리언)
+    out["kernel"] = str(out.get("kernel", "RBF"))
+    out["ard"] = bool(out.get("ard", True))
+    return out
+        
 
 def prepare_df_single(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     """단일 CSV 모드용(이전과 동일)."""

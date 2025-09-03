@@ -1,0 +1,39 @@
+
+# example.yaml (YOLO→UWB 보정)
+seed: 42
+
+# I/O
+time_col: t_ms                #시간 축 헤더 단위
+resample_hz: 10               # null/0이면 리샘플 스킵
+# homography_path: H.npy      # (u,v)만 있을 때 필요
+
+# 입력 피처 (CSV 헤더와 일치)
+feature_cols:
+  - uwb_x         # [m]
+  - uwb_y         # [m]
+  - x_ip          # [m] YOLO px→m
+  - y_ip          # [m] YOLO px→m
+  - v_ip          # [m/s] YOLO 궤적 속도(스칼라; 없으면 자동 계산됨: x_ip,y_ip 기반)
+  - speed         # [m/s] UWB 스칼라 속도 (없으면 라인 주석)
+  - accel         # [m/s^2] UWB 스칼라 가속도 (없으면 라인 주석)
+  - anch_count    # [-] 보이는 앵커 수 (없으면 라인 주석)
+  # - fppl        # (옵션) 신호 세기
+  # - cir_peak    # (옵션) CIR 피크/특징치
+
+# 타깃: YOLO를 UWB로 보정
+target_cols:
+  - target_dx     # = uwb_x - x_ip
+  - target_dy     # = uwb_y - y_ip
+
+# (선택) 그룹 학습
+# group_by: [floor_id, zone_id]
+# min_samples_per_group: 800
+# fallback_to_global: true
+
+model:
+  kernel: RBF         # RBF | Matern
+  ard: true
+  length_scale: 1.0
+  noise: 1e-3
+  alpha: 1e-6
+  matern_nu: 1.5

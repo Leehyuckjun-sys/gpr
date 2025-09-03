@@ -9,7 +9,8 @@ venv/
 .env
 
 # Data / Models
-models/
+models/*
+!models/.gitkeep
 data/*.npy
 *.joblib
 *.npz

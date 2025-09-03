@@ -38,6 +38,6 @@ model:
   kernel: RBF         # RBF | Matern
   ard: true
   length_scale: 1.0
-  noise: 1e-3
-  alpha: 1e-6
+  noise: 0.001
+  alpha: 0.000001
   matern_nu: 1.5

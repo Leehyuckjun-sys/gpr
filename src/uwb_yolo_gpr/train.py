@@ -11,7 +11,9 @@ from sklearn.metrics import mean_absolute_error
 import joblib
 
 from .gpr_model import GPConfig, GPR2D
-from .sync_and_resample import resample_uniform, add_speed_accel, build_targets
+from .sync_and_resample import (
+    resample_uniform, add_speed_accel, build_targets, merge_yolo_uwb
+)
 from .homography_transform import load_H, apply_homography
 
 
@@ -19,14 +21,12 @@ def load_config(path: str | Path) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
-def prepare_df(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
+def prepare_df_single(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
+    """단일 CSV 모드용(이전과 동일)."""
     t_col = cfg.get("time_col", "t_ms")
     hz = cfg.get("resample_hz", 10)
-
-    # 1) 리샘플
     df = resample_uniform(df, t_col=t_col, hz=hz)
 
-    # 2) x_ip/y_ip 없고 (u,v)만 있으면 호모그래피 적용
     if "x_ip" not in df.columns and {"u", "v"}.issubset(df.columns):
         H_path = cfg.get("homography_path", None)
         if not H_path:
@@ -35,12 +35,9 @@ def prepare_df(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
         xy = apply_homography(H, df[["u", "v"]].to_numpy())
         df["x_ip"], df["y_ip"] = xy[:, 0], xy[:, 1]
 
-    # 3) YOLO 궤적 기반 속도(없으면 자동 생성)
     if "v_ip" not in df.columns:
-        tmp = add_speed_accel(df, x_col="x_ip", y_col="y_ip", t_col=t_col, speed_col="v_ip", accel_col="v_ip_accel")
-        df = tmp
+        df = add_speed_accel(df, x_col="x_ip", y_col="y_ip", t_col=t_col, speed_col="v_ip", accel_col="v_ip_accel")
 
-    # 4) 타깃 만들기
     df = build_targets(df, uwb_x="uwb_x", uwb_y="uwb_y", x_ip="x_ip", y_ip="y_ip",
                        out_dx="target_dx", out_dy="target_dy")
     return df
@@ -59,10 +56,8 @@ def select_features(df: pd.DataFrame, cfg: dict) -> Tuple[np.ndarray, np.ndarray
 
 def train_one_group(df: pd.DataFrame, cfg: dict, out_dir: Path):
     X, y, feat_cols = select_features(df, cfg)
-
     scaler = StandardScaler()
     Xs = scaler.fit_transform(X)
-
     Xtr, Xte, ytr, yte = train_test_split(Xs, y, test_size=0.2, random_state=cfg.get("seed", 42))
 
     mcfg = GPConfig(kernel=cfg["model"]["kernel"],
@@ -75,14 +70,12 @@ def train_one_group(df: pd.DataFrame, cfg: dict, out_dir: Path):
     model.fit(Xtr, ytr[:, 0], ytr[:, 1])
 
     mu, std = model.predict(Xte, return_std=True)
-    mae = mean_absolute_error(yte, mu, multioutput="raw_values")  # [mae_dx, mae_dy]
+    mae = mean_absolute_error(yte, mu, multioutput="raw_values")
     p90 = np.percentile(np.hypot(yte[:, 0] - mu[:, 0], yte[:, 1] - mu[:, 1]), 90)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     model.save(out_dir)
     joblib.dump(scaler, out_dir / "scaler.joblib")
-
-    # 재현 가능한 추론을 위해 feature 목록 저장
     (out_dir / "features.json").write_text(json.dumps(feat_cols, ensure_ascii=False, indent=2), encoding="utf-8")
 
     with open(out_dir / "metrics.txt", "w", encoding="utf-8") as f:
@@ -93,22 +86,36 @@ def train_one_group(df: pd.DataFrame, cfg: dict, out_dir: Path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data", required=True, help="CSV path (must contain t_ms, uwb_x, uwb_y and either x_ip/y_ip or u/v)")
+    # 단일 CSV 모드
+    ap.add_argument("--data", help="단일 CSV 경로(통합 파일)")
+    # 두 CSV 모드
+    ap.add_argument("--yolo_csv", help="YOLO CSV 경로 (t_ms + x_ip,y_ip 또는 u,v)")
+    ap.add_argument("--uwb_csv", help="UWB CSV 경로 (t_ms + uwb_x, uwb_y)")
     ap.add_argument("--config", default="configs/example.yaml")
     ap.add_argument("--models_dir", default="models")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
-    df = pd.read_csv(args.data)
-    df = prepare_df(df, cfg)
+
+    if args.data:
+        df = pd.read_csv(args.data)
+        df = prepare_df_single(df, cfg)
+    else:
+        if not (args.yolo_csv and args.uwb_csv):
+            raise ValueError("두 CSV 모드: --yolo_csv 와 --uwb_csv 를 모두 지정하세요.")
+        yolo_df = pd.read_csv(args.yolo_csv)
+        uwb_df  = pd.read_csv(args.uwb_csv)
+        # 병합 + 타깃 생성
+        df = merge_yolo_uwb(yolo_df, uwb_df, cfg)
+        df = build_targets(df, uwb_x="uwb_x", uwb_y="uwb_y", x_ip="x_ip", y_ip="y_ip",
+                           out_dx="target_dx", out_dy="target_dy")
 
     group_by = cfg.get("group_by", None)
     if group_by:
-        groups = df.groupby(group_by, dropna=False)
-        for keys, gdf in groups:
+        for keys, gdf in df.groupby(group_by, dropna=False):
             if len(gdf) < cfg.get("min_samples_per_group", 800):
                 if cfg.get("fallback_to_global", True):
-                    print(f"skip group={keys} (samples {len(gdf)}). Use global model instead.")
+                    print(f"skip group={keys} (n={len(gdf)}). → use global.")
                     continue
             name = "_".join([f"{k}={v}" for k, v in zip(group_by, (keys if isinstance(keys, tuple) else (keys,)))])
             out_dir = Path(args.models_dir) / name

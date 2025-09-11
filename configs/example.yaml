@@ -4,7 +4,7 @@ seed: 42
 
 # I/O
 time_col: t_ms                #시간 축 헤더 단위
-resample_hz: 10               # null/0이면 리샘플 스킵
+resample_hz: 10               #공통 시간 그리드 10Hz null/0이면 리샘플 스킵
 # homography_path: H.npy      # (u,v)만 있을 때 필요
 
 # 두 CSV 병합 시 사용

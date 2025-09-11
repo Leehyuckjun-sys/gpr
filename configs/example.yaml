@@ -5,7 +5,7 @@ seed: 42
 # I/O
 time_col: t_ms                #시간 축 헤더 단위
 resample_hz: 10               #공통 시간 그리드 10Hz null/0이면 리샘플 스킵
- homography_path: data\raw\H.npy      # (u,v)만 있을 때 필요
+homography_path: data\raw\H.npy      # (u,v)만 있을 때 필요
 
 # 두 CSV 병합 시 사용
 yolo_time_offset_ms: 0      # YOLO 시간축을 '앞으로(+)' 밀어 UWB에 맞춤 (예: 900)
@@ -13,14 +13,14 @@ merge_tolerance_ms: 150     # asof 병합 허용 오차(ms). grid 병합이 기�
 
 # 입력 피처 (CSV 헤더와 일치)
 feature_cols:
-  - uwb_x         # [m]
-  - uwb_y         # [m]
+  # uwb_x         # [m]
+  # uwb_y         # [m]
   - x_ip          # [m] YOLO px→m
   - y_ip          # [m] YOLO px→m
   - v_ip          # [m/s] YOLO 궤적 속도(스칼라; 없으면 자동 계산됨: x_ip,y_ip 기반)
-  - speed         # [m/s] UWB 스칼라 속도 (없으면 라인 주석)
-  - accel         # [m/s^2] UWB 스칼라 가속도 (없으면 라인 주석)
-  - anch_count    # [-] 보이는 앵커 수 (없으면 라인 주석)
+  # speed         # [m/s] UWB 스칼라 속도 (없으면 라인 주석)
+  # accel         # [m/s^2] UWB 스칼라 가속도 (없으면 라인 주석)
+  # anch_count    # [-] 보이는 앵커 수 (없으면 라인 주석)
   # - fppl        # (옵션) 신호 세기
   # - cir_peak    # (옵션) CIR 피크/특징치
 

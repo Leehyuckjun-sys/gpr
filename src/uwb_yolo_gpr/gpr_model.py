@@ -1,49 +1,96 @@
+# src/uwb_yolo_gpr/gpr_model.py
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
-import numpy as np
-import joblib
-from typing import Tuple, Optional
+from typing import Optional, Tuple
 
+import joblib
+import numpy as np
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, Matern, WhiteKernel
 
 
 @dataclass
 class GPConfig:
-    kernel: str = "RBF"        # RBF | Matern
-    ard: bool = True           # per-feature length-scale
+    # Kernel & core hyperparams
+    kernel: str = "RBF"        # "RBF" | "Matern"
+    ard: bool = True           # per-feature length-scale (Automatic Relevance Determination)
     length_scale: float | list = 1.0
     noise: float = 1e-3        # WhiteKernel noise level
-    alpha: float = 1e-6        # numerical nugget
-    matern_nu: float = 1.5     # if kernel == "Matern"
+    alpha: float = 1e-6        # numerical nugget (ridge) for stability
+    matern_nu: float = 1.5     # only used if kernel == "Matern"
+
+    # ★ Added: stability/robustness controls (with safe defaults)
+    length_scale_bounds: Tuple[float, float] = (1e-4, 1e4)
+    noise_bounds: Tuple[float, float] = (1e-6, 1e1)
+    normalize_y: bool = True
+    n_restarts_optimizer: int = 3
 
 
 def _make_kernel(cfg: GPConfig, n_features: int):
-    # ARD: 피처별 length_scale (길이 n_features로 브로드캐스트)
+    """
+    Build kernel with ARD (vector length_scale) support and sensible bounds to
+    avoid degeneracy (length_scale collapsing to tiny values, etc.).
+    """
+    # ARD: broadcast per-feature length_scale
     if cfg.ard:
         ls = np.broadcast_to(cfg.length_scale, (n_features,)).astype(float)
     else:
         ls = float(cfg.length_scale)
 
-    base = Matern(length_scale=ls, nu=cfg.matern_nu) if cfg.kernel.upper() == "MATERN" else RBF(length_scale=ls)
-    return base + WhiteKernel(noise_level=cfg.noise)
+    # Base kernel with bounds
+    if cfg.kernel.upper() == "MATERN":
+        base = Matern(
+            length_scale=ls,
+            nu=cfg.matern_nu,
+            length_scale_bounds=cfg.length_scale_bounds,
+        )
+    else:  # RBF default
+        base = RBF(
+            length_scale=ls,
+            length_scale_bounds=cfg.length_scale_bounds,
+        )
+
+    # Additive white noise with bounds
+    return base + WhiteKernel(
+        noise_level=cfg.noise,
+        noise_level_bounds=cfg.noise_bounds,
+    )
 
 
 class GPR2D:
-    """dx, dy 각각에 대해 독립 GP를 학습·추론"""
+    """
+    Two independent Gaussian Processes for dx and dy.
+    Trains and predicts correction components separately, then stacks them.
+    """
     def __init__(self, cfg: GPConfig, n_features: int):
         k = _make_kernel(cfg, n_features)
-        self.gp_dx = GaussianProcessRegressor(kernel=k, alpha=cfg.alpha, normalize_y=False)
-        self.gp_dy = GaussianProcessRegressor(kernel=k, alpha=cfg.alpha, normalize_y=False)
+        # ★ Added: normalize_y + multiple optimizer restarts for stability
+        self.gp_dx = GaussianProcessRegressor(
+            kernel=k,
+            alpha=cfg.alpha,
+            normalize_y=cfg.normalize_y,
+            n_restarts_optimizer=cfg.n_restarts_optimizer,
+        )
+        self.gp_dy = GaussianProcessRegressor(
+            kernel=k,
+            alpha=cfg.alpha,
+            normalize_y=cfg.normalize_y,
+            n_restarts_optimizer=cfg.n_restarts_optimizer,
+        )
         self.n_features = n_features
 
     def fit(self, X: np.ndarray, y_dx: np.ndarray, y_dy: np.ndarray):
-        assert X.shape[1] == self.n_features
+        assert X.shape[1] == self.n_features, \
+            f"Expected {self.n_features} features, got {X.shape[1]}"
         self.gp_dx.fit(X, y_dx)
         self.gp_dy.fit(X, y_dy)
 
-    def predict(self, X: np.ndarray, return_std: bool = True) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+    def predict(
+        self,
+        X: np.ndarray,
+        return_std: bool = True
+    ) -> tuple[np.ndarray, Optional[np.ndarray]]:
         mu_dx, std_dx = self.gp_dx.predict(X, return_std=True)
         mu_dy, std_dy = self.gp_dy.predict(X, return_std=True)
         mu = np.stack([mu_dx, mu_dy], axis=1)
@@ -63,10 +110,13 @@ class GPR2D:
         in_dir = Path(in_dir)
         gp_dx = joblib.load(in_dir / "gp_dx.joblib")
         gp_dy = joblib.load(in_dir / "gp_dy.joblib")
-        model = object.__new__(GPR2D)
+
+        model = object.__new__(GPR2D)  # bypass __init__
         model.gp_dx = gp_dx
         model.gp_dy = gp_dy
-        # 입력 차원: 커널의 length_scale 길이로 추정 (k1=RBF/Matern, k2=White)
+
+        # Infer input dimensionality from the fitted kernel (k1 = base kernel)
+        # length_scale can be scalar or vector; ensure 1D and take its length
         ls = gp_dx.kernel_.k1.length_scale
         model.n_features = len(np.atleast_1d(ls))
         return model
